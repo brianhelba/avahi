@@ -238,13 +238,14 @@ static void incoming_probe(AvahiServer *s, AvahiRecord *record, AvahiInterface *
     }
 }
 
-static int handle_conflict(AvahiServer *s, AvahiInterface *i, AvahiRecord *record, int unique) {
+static int handle_conflict(AvahiServer *s, AvahiInterface *i, AvahiRecord *record, int unique, const AvahiAddress *a) {
     int valid = 1, ours = 0, conflict = 0, withdraw_immediately = 0;
     AvahiEntry *e, *n, *conflicting_entry = NULL;
 
     assert(s);
     assert(i);
     assert(record);
+    assert(a);
 
     /* Check whether an incoming record conflicts with one of our own */
 
@@ -319,18 +320,25 @@ static int handle_conflict(AvahiServer *s, AvahiInterface *i, AvahiRecord *recor
     }
 
     if (!ours && conflict) {
-        char *t;
+        char *t, addr[AVAHI_ADDRESS_STR_MAX];
 
         valid = 0;
 
+        /* This is the event that ends in a host name or service name
+         * change, so name the record and its sender at the default
+         * log level: the "Host name conflict, retrying with ..."
+         * line that follows does not say which record collided or
+         * who sent it, and a sender that is one of our own addresses
+         * points at a second mDNS responder on this host. */
         t = avahi_record_to_string(record);
+        avahi_address_snprint(addr, sizeof(addr), a);
 
         if (withdraw_immediately) {
-            avahi_log_debug("Received conflicting record [%s] with local record to be. Withdrawing.", t);
+            avahi_log_info("Received conflicting record [%s] from %s on %s.%s with local record to be. Withdrawing.", t, addr, i->hardware->name, avahi_proto_to_string(i->protocol));
             withdraw_rrset(s, record->key);
         } else {
             assert(conflicting_entry);
-            avahi_log_debug("Received conflicting record [%s]. Resetting our record.", t);
+            avahi_log_info("Received conflicting record [%s] from %s on %s.%s. Resetting our record.", t, addr, i->hardware->name, avahi_proto_to_string(i->protocol));
             avahi_entry_return_to_initial_state(s, conflicting_entry, i);
 
             /* Local unique records are returned to probing
@@ -713,7 +721,7 @@ static void handle_response_packet(AvahiServer *s, AvahiDnsPacket *p, AvahiInter
                 }
             }
 
-            if (handle_conflict(s, i, record, cache_flush)) {
+            if (handle_conflict(s, i, record, cache_flush, a)) {
                 if (!from_local_iface) {
                     if (!avahi_record_is_link_local_address(record))
                         reflect_response(s, i, record, cache_flush);
